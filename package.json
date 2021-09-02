@@ -1,0 +1,21 @@
+{
+  "name": "load_tester",
+  "version": "1.0.0",
+  "description": "",
+  "main": "load_tester.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ejs": "^3.1.6",
+    "express": "^4.17.1",
+    "socket.io": "^4.2.0",
+    "socket.io-client": "^4.2.0",
+    "sqlite3": "^5.0.2",
+    "uWebSockets.js": "uNetworking/uWebSockets.js#18.14.0",
+    "uniqid": "^5.4.0",
+    "ws": "^8.2.1"
+  }
+}

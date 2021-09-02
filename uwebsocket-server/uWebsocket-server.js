@@ -1,0 +1,252 @@
+const uWS = require('uWebSockets.js');
+const http = require('http');
+const assert = require('assert');
+const util = require('util');
+const express = require('express');
+const path = require('path');
+const uniqid = require('uniqid');
+const ejs = require('ejs')
+const MAX_CLIENTS = 1000;
+const MAX_TOPICS_PER_CLIENT = 10;
+const MIN_MESSAGES_PER_INTERVAL = 250;
+const MAX_MESSAGES_PER_INTERVAL = 400;
+const MAX_BUCKET_COUNT = 10;
+const AVG_SIZE_BUFFER = 500; // size in bytes
+const HTTP_PORT = 9002;
+const WS_PORT = 9003;
+
+const app = express();
+
+// view engine setup
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
+app.get('/',(req,res) => {
+	res.render('index',{
+		name : 'uWebSockets benchmark'
+	});
+});
+
+var httpServer = http.Server(app);
+
+httpServer.listen(HTTP_PORT,() => {
+	util.log('Server listening on port - ',HTTP_PORT);
+});
+
+
+
+/***************** DataPublisher ***********************/
+class DataPublisher {
+
+    constructor(options){
+        this.isHandFulTopic = options.isHandFulTopic;
+        this._bucket = new Array(MAX_CLIENTS).fill(0);
+        this._currBucket = 0;
+    }
+
+    init(){
+        this._topics = new Array(MAX_CLIENTS);
+        for ( let i = 0 ; i < MAX_CLIENTS ; i++ )
+            this._topics[i] = `Topic - ${uniqid()}`;
+
+        this._publishIntervalRef = setInterval(this.publish.bind(this), 1000);
+    }
+
+    destroy(){
+        clearInterval(this._publishIntervalRef);
+    }
+
+    matchClientToRooms(ws, cb) {
+
+        if ( this.isHandFulTopic ) {
+        
+            if ( this._bucket[this._currBucket] < MAX_BUCKET_COUNT ){
+                this._bucket[this._currBucket]++;
+                console.log(`Adding client ${ws.id} in the subscription list of ${this._topics[this._currBucket]}`)
+                ws.subscribe(this._topics[this._currBucket]);
+            }
+            else if ( this._currBucket < MAX_CLIENTS ) {
+                this._currBucket++;
+                this._bucket[this._currBucket]++;
+                console.log(`Adding client ${ws.id} in the subscription list of ${this._topics[this._currBucket]}`)
+                ws.subscribe(this._topics[this._currBucket]);
+            }
+            else{
+                console.log('no space for any more clients in this test.');
+            }
+
+            ws.topics = [this._topics[this._currBucket]];
+        
+        }
+        else {
+        
+            let topicsCountToSubscribe = getRandomInt(1, MAX_TOPICS_PER_CLIENT);
+            let topics = [];
+
+            for ( let  i = 0 ; i < topicsCountToSubscribe ; i++ ) {
+            
+                let randomTopicIndex = getRandomInt(0, MAX_CLIENTS - 1)
+                let topic = this._topics[randomTopicIndex];
+            
+                console.log(`Adding client ${ws.id} in the subscription list of ${topic}`)
+                ws.subscribe(topic);
+                topics.push(topic);
+            }
+
+            ws.topics = topics;
+        
+        }
+    }    
+
+    unMatchClientToRooms(ws) {
+
+        if ( ws.topics ) {
+            for ( let i = 0 ; i < ws.topics.length ; i++ ) {
+                let topic = ws.topics[i];
+                if ( !ws.closed )
+                    ws.unsubscribe(topic);
+            }
+        }
+    }
+
+    generateMessage(){
+
+        let msgbuf = Buffer.alloc(AVG_SIZE_BUFFER);
+        
+        let dateObj = new Date();
+        let originTime = dateObj.getTime();
+        let str = dateObj.toLocaleTimeString();
+
+        let hi = ~~(originTime / 0x0100000000);
+        let lo = originTime % 0x0100000000;
+
+        msgbuf.writeUInt32LE(hi, 0);
+        msgbuf.writeUInt32LE(lo, 4);
+        msgbuf.writeUInt8(str.length, 9);
+        msgbuf.write(str, 10);
+
+        assert(msgbuf.length == AVG_SIZE_BUFFER);
+        
+        return msgbuf
+    }
+
+    publish(){
+
+        const messagesCount = getRandomInt(MIN_MESSAGES_PER_INTERVAL, MAX_MESSAGES_PER_INTERVAL);
+        util.log(`Publishing ${messagesCount} messages`);
+        
+        if ( !this.isHandFulTopic ) {
+            
+            for ( let i = 0 ; i < messagesCount ; i++ ) {
+                
+                let messageBuffer = this.generateMessage();
+                let topicCountToPublishInto = getRandomInt(1, MAX_CLIENTS);
+                let cnt = 0,
+                    topicset = {};
+                
+                while ( cnt < topicCountToPublishInto ) {
+                    
+                    let topicIndex = getRandomInt(1, MAX_CLIENTS);
+                    let topic = this._topics[topicIndex];
+
+                    if ( topicset[topic] )
+                        continue;
+
+                    uApp.publish(topic, messageBuffer, true);
+
+                    topicset[topic] = true;
+                    cnt++;
+                }
+            }
+
+        }
+        else {
+
+            for ( let i = 0 ; i < messagesCount ; i++ ) {
+
+                let messageBuffer = this.generateMessage();
+                for ( let j = 0 ; j < MAX_BUCKET_COUNT ; j++ ) {
+                    let topic = this._topics[j];
+                    uApp.publish(topic, messageBuffer, true);
+                }          
+            }
+
+        }
+    }
+
+}
+
+function getRandomInt(min, max) {
+    min = Math.ceil(min);
+    max = Math.floor(max);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+
+
+const uApp = uWS.App();
+const options = {
+    maxPayloadLength : 16 * 1024,
+    idleTimeout : 120,
+    closeOnBackpressureLimit : true,
+    maxBackpressure : 10 * 1024
+};
+
+const namespace = {
+    publisher : null
+};
+
+uApp.ws('/*', {
+
+    maxPayloadLength: options.maxPayloadLength,    // max payload size that can be recvd on connection
+    
+    idleTimeout: options.idleTimeout,       // idletimeout, closes the websocket connection if no data is passed for this time interval.
+    
+    closeOnBackpressureLimit : options.closeOnBackpressureLimit, // close the connection if backpressure limit reached.
+    
+    maxBackpressure : options.maxBackpressure, // kept to 5MB for now, because of positions snapshot
+    
+    compression : uWS.SHARED_COMPRESSOR,
+
+    // Handler for new WebSocket connection. WebSocket is valid from open to close, no errors.
+    open : (ws) => {
+        ws.id = uniqid();
+        console.log(`uWebSocket connection received : ${ws.id}`);
+        namespace.publisher.matchClientToRooms(ws);
+    },
+
+    message: ( ws, message, isBinary ) => {
+    },
+
+    drain : (ws) => {
+        console.log(`Drain event occured on websocket : ${ws.id}`);
+    },
+    
+    close: (ws, code, messageBuffer) => {
+        let arr = new Uint8Array(messageBuffer);
+        let str = String.fromCharCode.apply(String, arr);
+        console.log(`connection closed for ${ws.id} with code : ${code} and message : ${str}`);
+        ws.closed = true;
+        namespace.publisher.unMatchClientToRooms(ws);
+    },
+
+    ping : (ws) => {
+        console.log(`ping request recvd from client - ${ws.id}`);
+    },
+
+    pong : (ws) => {
+        console.log(`pong request recvd from client - ${ws.id}`);
+    }
+
+})
+.listen( parseInt(WS_PORT), (listenSocket) => {
+    if (listenSocket)
+        console.log('UWS WS Server listening on port ',WS_PORT);
+
+    namespace.publisher = new DataPublisher({
+        isHandFulTopic : true
+    });
+
+    namespace.publisher.init();
+});
+
