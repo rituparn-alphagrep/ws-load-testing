@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title><%=name %></title>
+		<base href="/" />
+		<meta charset="utf-8">
+    	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700,400italic">
+	</head>
+	<body>
+			<table>
+				<tr>
+					<th> Node Receive Timestamp</th>
+					<th> Browser Receive Timestamp</th>
+				</tr>
+
+				<tr>
+					<td id="node"></td>
+					<td id="browser"></td>
+				</tr>
+			</table>
+
+	</body>
+	<script type="text/javascript">
+		window.name = <%- JSON.stringify(name) %>;
+	</script>
+	<script type="text/javascript" src="scripts/socket.io/client-dist/socket.io.js"></script>
+
+	<script type="text/javascript">
+
+			var node = document.getElementById('node');
+			var browser = document.getElementById('browser');
+
+			/* Current value of our share */
+			let socket, value, timer;
+			let connect = () => {
+				
+				socket = io(`ws://${window.location.hostname}:9001`, {
+	                transports: ["websocket"]
+	            });
+
+				socket.on('connect',() => {
+					console.log('websocket client connection initiated... ',socket.id);
+				});
+
+				socket.on('close',() => {
+					console.log('websocket closed connection... ',socket.id);
+				});
+
+				socket.on('message',(arrbuf) => {
+					let dv = new DataView(arrbuf);
+
+					let byteOffset = 9;
+					let sz = dv.getUint8(byteOffset);
+					byteOffset++;
+					let buf = arrbuf.slice(byteOffset, byteOffset + sz);
+					let message = decodeStringBuf(buf);
+					console.log(message)
+					node.innerText = message;
+					browser.innerText = new Date().toLocaleTimeString();
+				});
+
+			
+			};
+
+			connect();
+			
+			function decodeStringBuf(buffer){
+
+			    var dataview,
+			        responsemessage = '', 
+			        bytesRead, 
+			        totalBytes;
+			    
+			    dataview = new DataView(buffer);
+			    totalBytes = buffer.byteLength;
+			    bytesRead = 0;
+
+			    while ( bytesRead < totalBytes ) {
+			        responsemessage += String.fromCharCode(dataview.getUint8(bytesRead));
+			        bytesRead++;
+			    }
+
+			    return responsemessage;
+			}
+	</script>
+
+</html>
